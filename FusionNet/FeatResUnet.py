@@ -168,6 +168,24 @@ class FeatureResUNet(nn.Module):
 
         self.connection_3 = nn.MaxPool2d(kernel_size=2,stride=2)
 
+        #BottleNeck in: m x 512 x H//16 x W//16, out: m x 1024 x H//16 x W//16 
+        self.BottleNeck_ResUnit = ResUnit(in_channels = 512,
+                                          mid_channels = 1024,
+                                          out_channels = 1024,
+                                          kernel_size = 3,
+                                          stride=1,
+                                          normalization=normalization,
+                                          track_running_stats=track_running_stats)
+        
+        self.BottleNeck_CNL = CNL(in_channels=1024,
+                                  out_channels=1024,
+                                  kernel_size=3,
+                                  stride=1,
+                                  padding="same",
+                                  normalization=normalization,
+                                  track_running_stats=track_running_stats)
+        
+
         
 
 
@@ -195,8 +213,11 @@ class FeatureResUNet(nn.Module):
         #block 3 in: m x 256 x H//8 x W//8, out: m x 512 x H//16 x W//16 : connection_3
         res3unit = self.res3unit(connection_2)
         CNL3 = self.CNL3(res3unit)
-        connection_3 = self.connection_2(CNL2)
+        connection_3 = self.connection_3(CNL3)
 
+        #BottleNeck in: m x 512 x H//16 x W//16, out: m x 1024 x H//16 x W//16 
+        BottleNeck_ResUnit = self.BottleNeck_ResUnit(connection_3)
+        BottleNeck_CNL = self.BottleNeck_CNL(BottleNeck_ResUnit)
 
 
 
