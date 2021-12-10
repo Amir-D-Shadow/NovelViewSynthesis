@@ -299,7 +299,33 @@ class FeatureResUNet(nn.Module):
                             normalization=normalization,
                             track_running_stats=track_running_stats)
 
+        #block 7 (decode input 0) in: m x 128 x H x W , out: m x 3 x H x W
+        self.res7unit = ResUnit(in_channels = 128,
+                                mid_channels = 64,
+                                out_channels = 64,
+                                kernel_size = 3,
+                                stride = 1,
+                                normalization=normalization,
+                                track_running_stats=track_running_stats)
+        
+        self.CNL7 = CNL(in_channels=64,
+                        out_channels=64,
+                        kernel_size=3,
+                        stride=1,
+                        padding="same",
+                        normalization=normalization,
+                        track_running_stats=track_running_stats)
 
+        self.CNL8 = CNL(in_channels=64,
+                        out_channels=3,
+                        kernel_size=1,
+                        stride=1,
+                        padding="same",
+                        normalization=normalization,
+                        track_running_stats=track_running_stats)
+        
+
+        
     def forward(self,x):
 
         """
@@ -334,7 +360,7 @@ class FeatureResUNet(nn.Module):
         # out: m x 1024 x H//8 x W//8 
         cat3 = torch.cat((CNL3,BottleNeck_UpCNL),dim = 1)
         
-        #block 4 (decode block 3) in: m x 1024 x H//8 x W//8 , out: 256 x H//4 x W//4
+        #block 4 (decode block 3) in: m x 1024 x H//8 x W//8 , out: m x 256 x H//4 x W//4
         res4unit = self.res4unit(cat3)
         CNL4 = self.CNL4(res4unit)
         UPCNL4 = self.UPCNL4(CNL4)
@@ -342,7 +368,7 @@ class FeatureResUNet(nn.Module):
         # out: m x 512 x H//4 x W//4
         cat2 = torch.cat((CNL2,UPCNL4),dim = 1)
 
-        #block 5 (decode block 2) in: m x 512 x H//4 x W//4 , out: 128 x H//2 x W//2
+        #block 5 (decode block 2) in: m x 512 x H//4 x W//4 , out: m x 128 x H//2 x W//2
         res5unit = self.res5unit(cat2)
         CNL5 = self.CNL5(res5unit)
         UPCNL5 = self.UPCNL5(CNL5)
@@ -350,9 +376,18 @@ class FeatureResUNet(nn.Module):
         # out: m x 256 x H//2 x W//2
         cat1 = torch.cat((CNL1,UPCNL5),dim = 1)
 
-        #block 6 (decode block 1) in: m x 256 x H//2 x W//2 , out: 64 x H x W
+        #block 6 (decode block 1) in: m x 256 x H//2 x W//2 , out: m x 64 x H x W
         res6unit = self.res6unit(cat1)
         CNL6 = self.CNL6(res6unit)
         UPCNL6 = self.UPCNL6(CNL6)
 
+        # out: m x 128 x H x W
+        cat0 = torch.cat((CNL0,UPCNL6),dim = 1)
         
+        #block 7 (decode input 0) in: m x 128 x H x W , out: m x 3 x H x W
+        res7unit = self.res7unit(cat0)
+        CNL7 = self.CNL7(res7unit)
+
+        outCNL = self.CNL8(CNL7)
+
+        return outCNL
