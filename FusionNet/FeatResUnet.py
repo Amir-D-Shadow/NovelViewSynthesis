@@ -82,8 +82,30 @@ class CNL(nn.Module):
 
         return layer_module
         
+#Decoded Block
+class UpCNL(nn.Module):
 
+    def __init__(self,in_channels, out_channels,scale_factor, kernel_size, stride=1,mode="nearest", padding=0,normalization=None,track_running_stats=False):
+
+        self.upsample1 = nn.Upsample(scale_factor=scale_factor,mode=mode)
         
+        self.CNL1 = CNL(in_channels=in_channels,
+                        out_channels=out_channels,
+                        kernel_size=kernel_size,
+                        stride=stride,
+                        padding=padding,
+                        normalization=normalization,
+                        track_running_stats=track_running_stats)
+
+    def forward(self,x):
+
+        layer_module = self.upsample1(x)
+        
+        layer_module = self.CNL1(layer_module)
+
+        return layer_module
+
+    
 #Fusion Net
 class FeatureResUNet(nn.Module):
 
@@ -168,7 +190,7 @@ class FeatureResUNet(nn.Module):
 
         self.connection_3 = nn.MaxPool2d(kernel_size=2,stride=2)
 
-        #BottleNeck in: m x 512 x H//16 x W//16, out: m x 1024 x H//16 x W//16 
+        #BottleNeck in: m x 512 x H//16 x W//16, out: m x 512 x H//8 x W//8 
         self.BottleNeck_ResUnit = ResUnit(in_channels = 512,
                                           mid_channels = 1024,
                                           out_channels = 1024,
@@ -184,9 +206,98 @@ class FeatureResUNet(nn.Module):
                                   padding="same",
                                   normalization=normalization,
                                   track_running_stats=track_running_stats)
-        
 
+        self.BottleNeck_UpCNL = UpCNL(in_channels = 1024,
+                                      out_channels = 512,
+                                      scale_factor = 2,
+                                      kernel_size = 3,
+                                      stride = 1,
+                                      mode = "nearest",
+                                      padding = "same",
+                                      normalization=normalization,
+                                      track_running_stats=track_running_stats)
+
+
+        #block 4 (decode block 3) in: m x 1024 x H//8 x W//8 , out: m x 256 x H//4 x W//4
+        self.res4unit = ResUnit(in_channels = 1024,
+                                mid_channels = 512,
+                                out_channels = 512,
+                                kernel_size = 3,
+                                stride=1,
+                                normalization=normalization,
+                                track_running_stats=track_running_stats)
         
+        self.CNL4 = CNL(in_channels=512,
+                        out_channels=512,
+                        kernel_size=3,
+                        stride=1,
+                        padding="same",
+                        normalization=normalization,
+                        track_running_stats=track_running_stats)
+
+        self.UPCNL4 = UpCNL(in_channels = 512,
+                            out_channels = 256,
+                            scale_factor = 2,
+                            kernel_size = 3,
+                            stride = 1,
+                            mode = "nearest",
+                            padding = "same",
+                            normalization=normalization,
+                            track_running_stats=track_running_stats)
+
+        #block 5 (decode block 2) in: m x 512 x H//4 x W//4 , out: m x 128 x H//2 x W//2
+        self.res5unit = ResUnit(in_channels = 512,
+                                mid_channels = 256,
+                                out_channels = 256,
+                                kernel_size = 3,
+                                stride = 1,
+                                normalization=normalization,
+                                track_running_stats=track_running_stats)
+        
+        self.CNL5 = CNL(in_channels=256,
+                        out_channels=256,
+                        kernel_size=3,
+                        stride=1,
+                        padding="same",
+                        normalization=normalization,
+                        track_running_stats=track_running_stats)
+
+        self.UPCNL5 = UpCNL(in_channels = 256,
+                            out_channels = 128,
+                            scale_factor = 2,
+                            kernel_size = 3,
+                            stride = 1,
+                            mode = "nearest",
+                            padding = "same",
+                            normalization=normalization,
+                            track_running_stats=track_running_stats)
+
+        #block 6 (decode block 1) in: m x 256 x H//2 x W//2 , out: m x 64 x H x W
+        self.res6unit = ResUnit(in_channels = 256,
+                                mid_channels = 128,
+                                out_channels = 128,
+                                kernel_size = 3,
+                                stride = 1,
+                                normalization=normalization,
+                                track_running_stats=track_running_stats)
+        
+        self.CNL6 = CNL(in_channels=128,
+                        out_channels=128,
+                        kernel_size=3,
+                        stride=1,
+                        padding="same",
+                        normalization=normalization,
+                        track_running_stats=track_running_stats)
+
+        self.UPCNL6 = UpCNL(in_channels = 128,
+                            out_channels = 64,
+                            scale_factor = 2,
+                            kernel_size = 3,
+                            stride = 1,
+                            mode = "nearest",
+                            padding = "same",
+                            normalization=normalization,
+                            track_running_stats=track_running_stats)
 
 
     def forward(self,x):
@@ -215,12 +326,33 @@ class FeatureResUNet(nn.Module):
         CNL3 = self.CNL3(res3unit)
         connection_3 = self.connection_3(CNL3)
 
-        #BottleNeck in: m x 512 x H//16 x W//16, out: m x 1024 x H//16 x W//16 
+        #BottleNeck in: m x 512 x H//16 x W//16, out: m x 512 x H//8 x W//8  
         BottleNeck_ResUnit = self.BottleNeck_ResUnit(connection_3)
         BottleNeck_CNL = self.BottleNeck_CNL(BottleNeck_ResUnit)
+        BottleNeck_UpCNL = self.BottleNeck_UpCNL(BottleNeck_CNL)
 
-
-
+        # out: m x 1024 x H//8 x W//8 
+        cat3 = torch.cat((CNL3,BottleNeck_UpCNL),dim = 1)
         
+        #block 4 (decode block 3) in: m x 1024 x H//8 x W//8 , out: 256 x H//4 x W//4
+        res4unit = self.res4unit(cat3)
+        CNL4 = self.CNL4(res4unit)
+        UPCNL4 = self.UPCNL4(CNL4)
+
+        # out: m x 512 x H//4 x W//4
+        cat2 = torch.cat((CNL2,UPCNL4),dim = 1)
+
+        #block 5 (decode block 2) in: m x 512 x H//4 x W//4 , out: 128 x H//2 x W//2
+        res5unit = self.res5unit(cat2)
+        CNL5 = self.CNL5(res5unit)
+        UPCNL5 = self.UPCNL5(CNL5)
+
+        # out: m x 256 x H//2 x W//2
+        cat1 = torch.cat((CNL1,UPCNL5),dim = 1)
+
+        #block 6 (decode block 1) in: m x 256 x H//2 x W//2 , out: 64 x H x W
+        res6unit = self.res6unit(cat1)
+        CNL6 = self.CNL6(res6unit)
+        UPCNL6 = self.UPCNL6(CNL6)
 
         
