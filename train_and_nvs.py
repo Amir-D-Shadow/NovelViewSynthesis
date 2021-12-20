@@ -8,7 +8,6 @@ import imageio
 import matplotlib.pyplot as plt
 from tqdm.notebook import tqdm
 from IPython.display import Image
-from google.colab import files
 
 
 from nerfmm.utils.pos_enc import encode_position
@@ -17,6 +16,8 @@ from nerfmm.utils.comp_ray_dir import comp_ray_dir_cam_fxfy
 
 from nerfmm.utils.training_utils import mse2psnr
 from nerfmm.utils.lie_group_helper import convert3x4_4x4
+
+from PIL import Image as PILImage
 
 #utils parameters
 image_dir = f"{os.getcwd()}/data/image/room1"
@@ -31,6 +32,7 @@ def load_imgs(image_dir):
     img_list = []
     for p in img_paths:
         img = imageio.imread(p)[:, :, :3]  # (H, W, 3) np.uint8
+        img = PILImage.fromarray(img).resize((360,640)) #reshape
         img_list.append(img)
     img_list = np.stack(img_list)  # (N, H, W, 3)
     img_list = torch.from_numpy(img_list).float() / 255  # (N, H, W, 3) torch.float32
@@ -47,6 +49,10 @@ def load_imgs(image_dir):
 
 image_data = load_imgs(image_dir)
 imgs = image_data['imgs']  # (N, H, W, 3) torch.float32
+
+N_IMGS = image_data['N_imgs']
+H = image_data['H']
+W = image_data['W']
 
 #define learnable focals
 class LearnFocal(nn.Module):
