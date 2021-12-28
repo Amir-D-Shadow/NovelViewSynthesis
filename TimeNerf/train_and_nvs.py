@@ -443,6 +443,7 @@ for epoch_i in tqdm(range(N_EPOCH), desc='Training'):
     scheduler_nerf.step()
     scheduler_focal.step()
     scheduler_pose.step()
+    scheduler_time.step()
 
     learned_c2ws = torch.stack([pose_param_net(i) for i in range(N_IMGS)])  # (N, 4, 4)
     pose_history.append(learned_c2ws[:, :3, 3])  # (N, 3) only store positions as we vis in 2D.
