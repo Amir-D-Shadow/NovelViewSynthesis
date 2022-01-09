@@ -18,12 +18,23 @@ from nerfmm.utils.training_utils import mse2psnr
 from nerfmm.utils.lie_group_helper import convert3x4_4x4
 
 from PIL import Image as PILImage
+import json
 
 #utils parameters
-scene_name = "room17"
+GPU_ID = "cuda:0"
+scene_name = "room2"
 image_dir = f"{os.getcwd()}/data/image/{scene_name}"
 model_weight_path = f"{os.getcwd()}/model_weight/{scene_name}" 
 
+file = open(f"{os.getcwd()}/data/poses_info/{scene_name}/poses.json")
+poses_info = json.load(file)
+
+poses_last5 = poses_info["poses"][-5:]
+
+camera_poses = np.array(poses_last5[2])[:15].reshape((3,5))
+focal_f = camera_poses[-1,-1]
+
+camera_ex = camera_poses[:,:3]
 
 #load image
 def load_imgs(image_dir):
@@ -34,7 +45,7 @@ def load_imgs(image_dir):
     img_list = []
     for p in img_paths:
         img = imageio.imread(p)[:, :, :3]  # (H, W, 3) np.uint8
-        #img = PILImage.fromarray(img).resize((960,540)) #reshape
+        img = PILImage.fromarray(img).resize((960,540)) #reshape
         img_list.append(img)
     img_list = np.stack(img_list)  # (N, H, W, 3)
     img_list = torch.from_numpy(img_list).float() / 255  # (N, H, W, 3) torch.float32
@@ -62,8 +73,10 @@ class LearnFocal(nn.Module):
         super(LearnFocal, self).__init__()
         self.H = H
         self.W = W
-        self.fx = nn.Parameter(torch.tensor(1.0, dtype=torch.float32), requires_grad=req_grad)  # (1, )
-        self.fy = nn.Parameter(torch.tensor(1.0, dtype=torch.float32), requires_grad=req_grad)  # (1, )
+        #self.fx = nn.Parameter(torch.tensor(focal_f, dtype=torch.float32), requires_grad=req_grad)  # (1, )
+        self.fx = nn.Parameter(torch.tensor(1.0, dtype=torch.float32), requires_grad=req_grad)
+        #self.fy = nn.Parameter(torch.tensor(focal_f, dtype=torch.float32), requires_grad=req_grad)  # (1, )
+        self.fy = nn.Parameter(torch.tensor(1.0, dtype=torch.float32), requires_grad=req_grad)
 
     def forward(self):
         # order = 2, check our supplementary.
@@ -93,7 +106,8 @@ def Exp(r):
     skew_r = vec2skew(r)  # (3, 3)
     norm_r = r.norm() + 1e-15
     eye = torch.eye(3, dtype=torch.float32, device=r.device)
-    R = eye + (torch.sin(norm_r) / norm_r) * skew_r + ((1 - torch.cos(norm_r)) / norm_r**2) * (skew_r @ skew_r)
+    #R = eye + (torch.sin(norm_r) / norm_r) * skew_r + ((1 - torch.cos(norm_r)) / norm_r**2) * (skew_r @ skew_r)
+    R = torch.from_numpy(camera_ex).type(torch.float32).to(GPU_ID)
     return R
 
 
@@ -113,8 +127,10 @@ class LearnPose(nn.Module):
     def __init__(self, num_cams, learn_R, learn_t):
         super(LearnPose, self).__init__()
         self.num_cams = num_cams
-        self.r = nn.Parameter(torch.zeros(size=(num_cams, 3), dtype=torch.float32), requires_grad=learn_R)  # (N, 3)
-        self.t = nn.Parameter(torch.zeros(size=(num_cams, 3), dtype=torch.float32), requires_grad=learn_t)  # (N, 3)
+        #self.r = nn.Parameter(torch.zeros(size=(num_cams, 3), dtype=torch.float32), requires_grad=learn_R)  # (N, 3)
+        self.r = nn.Parameter(torch.ones(size = (num_cams,3),dtype = torch.float32), requires_grad=learn_R)
+        #self.t = nn.Parameter(torch.zeros(size=(num_cams, 3), dtype=torch.float32), requires_grad=learn_t)  # (N, 3)
+        self.t = nn.Parameter(torch.ones(size = (num_cams,3),dtype = torch.float32), requires_grad=learn_t)
 
     def forward(self, cam_id):
         r = self.r[cam_id]  # (3, ) axis-angle
@@ -226,7 +242,7 @@ def train_one_epoch(imgs, H, W, ray_params, opt_nerf, opt_focal,
     focal_net.train()
     pose_param_net.train()
 
-    t_vals = torch.linspace(ray_params.NEAR, ray_params.FAR, ray_params.N_SAMPLE, device='cuda:6')  # (N_sample,) sample position
+    t_vals = torch.linspace(ray_params.NEAR, ray_params.FAR, ray_params.N_SAMPLE, device=GPU_ID)  # (N_sample,) sample position
     L2_loss_epoch = []
 
     # shuffle the training imgs
@@ -238,12 +254,12 @@ def train_one_epoch(imgs, H, W, ray_params, opt_nerf, opt_focal,
 
         # KEY 1: compute ray directions using estimated intrinsics online.
         ray_dir_cam = comp_ray_dir_cam_fxfy(H, W, fxfy[0], fxfy[1])
-        img = imgs[i].to('cuda:6')  # (H, W, 4)
+        img = imgs[i].to(GPU_ID)  # (H, W, 4)
         c2w = pose_param_net(i)  # (4, 4)
 
-        # sample (64x64)32x32 pixel on an image and their rays for training.
-        r_id = torch.randperm(H, device='cuda:6')[:64]  # (N_select_rows)
-        c_id = torch.randperm(W, device='cuda:6')[:64]  # (N_select_cols)
+        # sample 32x32 pixel on an image and their rays for training.
+        r_id = torch.randperm(H, device=GPU_ID)[:32]  # (N_select_rows)
+        c_id = torch.randperm(W, device=GPU_ID)[:32]  # (N_select_cols)
         ray_selected_cam = ray_dir_cam[r_id][:, c_id]  # (N_select_rows, N_select_cols, 3)
         img_selected = img[r_id][:, c_id]  # (N_select_rows, N_select_cols, 3)
 
@@ -271,9 +287,9 @@ def render_novel_view(c2w, H, W, fxfy, ray_params, nerf_model):
     nerf_model.eval()
 
     ray_dir_cam = comp_ray_dir_cam_fxfy(H, W, fxfy[0], fxfy[1])
-    t_vals = torch.linspace(ray_params.NEAR, ray_params.FAR, ray_params.N_SAMPLE, device='cuda:6')  # (N_sample,) sample position
+    t_vals = torch.linspace(ray_params.NEAR, ray_params.FAR, ray_params.N_SAMPLE, device=GPU_ID)  # (N_sample,) sample position
 
-    c2w = c2w.to('cuda:6')  # (4, 4)
+    c2w = c2w.to(GPU_ID)  # (4, 4)
 
     # split an image to rows when the input image resolution is high
     rays_dir_cam_split_rows = ray_dir_cam.split(10, dim=0)  # input 10 rows each time
@@ -301,22 +317,22 @@ if __name__ == "__main__":
    #clear GPU memory
    #torch.cuda.empty_cache()
 
-   N_EPOCH = 12000  # 10K epochs are performed in original paper
+   N_EPOCH = 30000  # 10K epochs are performed in original paper
    EVAL_INTERVAL = 50  # render an image to visualise for every this interval.
 
    # Initialise all trainabled parameters
-   focal_net = LearnFocal(H, W, req_grad=True).cuda(6)
+   focal_net = LearnFocal(H, W, req_grad=True).cuda(int(GPU_ID[-1]))
    #focal_net = LearnFocal(H, W, req_grad=True)
    #focal_net.load_state_dict(torch.load(f"{model_weight_path}/{scene_name}_focal.pt"))
-   #focal_net = focal_net.cuda(6)
+   #focal_net = focal_net.cuda(int(GPU_ID[-1]))
    
-   pose_param_net = LearnPose(num_cams=N_IMGS, learn_R=True, learn_t=True).cuda(6)
+   pose_param_net = LearnPose(num_cams=N_IMGS, learn_R=True, learn_t=True).cuda(int(GPU_ID[-1]))
    #pose_param_net = LearnPose(num_cams=N_IMGS, learn_R=True, learn_t=True)
    #pose_param_net.load_state_dict(torch.load(f"{model_weight_path}/{scene_name}_pose.pt"))
-   #pose_param_net = pose_param_net.cuda(6)
+   #pose_param_net = pose_param_net.cuda(int(GPU_ID[-1]))
 
    # Get a tiny NeRF model. Hidden dimension set to 256(128)
-   nerf_model = TinyNerf(pos_in_dims=63, dir_in_dims=27, D=256).cuda(6)
+   nerf_model = TinyNerf(pos_in_dims=63, dir_in_dims=27, D=400).cuda(int(GPU_ID[-1]))
 
    # Set lr and scheduler: these are just stair-case exponantial decay lr schedulers.
    opt_nerf = torch.optim.Adam(nerf_model.parameters(), lr=0.001)
@@ -356,14 +372,14 @@ if __name__ == "__main__":
            #reload carmera model
            focal_net = LearnFocal(H, W, req_grad=True)
            focal_net.load_state_dict(torch.load(f"{model_weight_path}/{scene_name}_focal.pt"))
-           focal_net = focal_net.cuda(6)
+           focal_net = focal_net.cuda(int(GPU_ID[-1]))
 
            pose_param_net = LearnPose(num_cams=N_IMGS, learn_R=True, learn_t=True)
            pose_param_net.load_state_dict(torch.load(f"{model_weight_path}/{scene_name}_pose.pt"))
-           pose_param_net = pose_param_net.cuda(6)
+           pose_param_net = pose_param_net.cuda(int(GPU_ID[-1]))
 
            #re-initialize Nerf
-           nerf_model = TinyNerf(pos_in_dims=63, dir_in_dims=27, D=256).cuda(6)
+           nerf_model = TinyNerf(pos_in_dims=63, dir_in_dims=27, D=256).cuda(int(GPU_ID[-1]))
        """
        L2_loss = train_one_epoch(imgs, H, W, ray_params, opt_nerf, opt_focal,
                                  opt_pose, nerf_model, focal_net, pose_param_net)

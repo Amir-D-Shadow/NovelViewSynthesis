@@ -20,10 +20,9 @@ from nerfmm.utils.lie_group_helper import convert3x4_4x4
 from PIL import Image as PILImage
 
 #utils parameters
-scene_name = "room17"
+scene_name = "room13"
 image_dir = f"{os.getcwd()}/data/image/{scene_name}"
 model_weight_path = f"{os.getcwd()}/model_weight/{scene_name}" 
-
 
 #load image
 def load_imgs(image_dir):
@@ -34,7 +33,7 @@ def load_imgs(image_dir):
     img_list = []
     for p in img_paths:
         img = imageio.imread(p)[:, :, :3]  # (H, W, 3) np.uint8
-        #img = PILImage.fromarray(img).resize((960,540)) #reshape
+        img = PILImage.fromarray(img).resize((960,540)) #reshape
         img_list.append(img)
     img_list = np.stack(img_list)  # (N, H, W, 3)
     img_list = torch.from_numpy(img_list).float() / 255  # (N, H, W, 3) torch.float32
@@ -226,7 +225,7 @@ def train_one_epoch(imgs, H, W, ray_params, opt_nerf, opt_focal,
     focal_net.train()
     pose_param_net.train()
 
-    t_vals = torch.linspace(ray_params.NEAR, ray_params.FAR, ray_params.N_SAMPLE, device='cuda:6')  # (N_sample,) sample position
+    t_vals = torch.linspace(ray_params.NEAR, ray_params.FAR, ray_params.N_SAMPLE, device='cuda:8')  # (N_sample,) sample position
     L2_loss_epoch = []
 
     # shuffle the training imgs
@@ -238,12 +237,12 @@ def train_one_epoch(imgs, H, W, ray_params, opt_nerf, opt_focal,
 
         # KEY 1: compute ray directions using estimated intrinsics online.
         ray_dir_cam = comp_ray_dir_cam_fxfy(H, W, fxfy[0], fxfy[1])
-        img = imgs[i].to('cuda:6')  # (H, W, 4)
+        img = imgs[i].to('cuda:8')  # (H, W, 4)
         c2w = pose_param_net(i)  # (4, 4)
 
         # sample (64x64)32x32 pixel on an image and their rays for training.
-        r_id = torch.randperm(H, device='cuda:6')[:64]  # (N_select_rows)
-        c_id = torch.randperm(W, device='cuda:6')[:64]  # (N_select_cols)
+        r_id = torch.randperm(H, device='cuda:8')[:64]  # (N_select_rows)
+        c_id = torch.randperm(W, device='cuda:8')[:64]  # (N_select_cols)
         ray_selected_cam = ray_dir_cam[r_id][:, c_id]  # (N_select_rows, N_select_cols, 3)
         img_selected = img[r_id][:, c_id]  # (N_select_rows, N_select_cols, 3)
 
@@ -271,9 +270,9 @@ def render_novel_view(c2w, H, W, fxfy, ray_params, nerf_model):
     nerf_model.eval()
 
     ray_dir_cam = comp_ray_dir_cam_fxfy(H, W, fxfy[0], fxfy[1])
-    t_vals = torch.linspace(ray_params.NEAR, ray_params.FAR, ray_params.N_SAMPLE, device='cuda:6')  # (N_sample,) sample position
+    t_vals = torch.linspace(ray_params.NEAR, ray_params.FAR, ray_params.N_SAMPLE, device='cuda:8')  # (N_sample,) sample position
 
-    c2w = c2w.to('cuda:6')  # (4, 4)
+    c2w = c2w.to('cuda:8')  # (4, 4)
 
     # split an image to rows when the input image resolution is high
     rays_dir_cam_split_rows = ray_dir_cam.split(10, dim=0)  # input 10 rows each time
@@ -301,22 +300,22 @@ if __name__ == "__main__":
    #clear GPU memory
    #torch.cuda.empty_cache()
 
-   N_EPOCH = 12000  # 10K epochs are performed in original paper
+   N_EPOCH = 30000  # 10K epochs are performed in original paper
    EVAL_INTERVAL = 50  # render an image to visualise for every this interval.
 
    # Initialise all trainabled parameters
-   focal_net = LearnFocal(H, W, req_grad=True).cuda(6)
-   #focal_net = LearnFocal(H, W, req_grad=True)
-   #focal_net.load_state_dict(torch.load(f"{model_weight_path}/{scene_name}_focal.pt"))
-   #focal_net = focal_net.cuda(6)
-   
-   pose_param_net = LearnPose(num_cams=N_IMGS, learn_R=True, learn_t=True).cuda(6)
-   #pose_param_net = LearnPose(num_cams=N_IMGS, learn_R=True, learn_t=True)
-   #pose_param_net.load_state_dict(torch.load(f"{model_weight_path}/{scene_name}_pose.pt"))
-   #pose_param_net = pose_param_net.cuda(6)
+   #focal_net = LearnFocal(H, W, req_grad=True).cuda(8)
+   focal_net = LearnFocal(H, W, req_grad=True)
+   focal_net.load_state_dict(torch.load(f"{model_weight_path}/{scene_name}_focal.pt"))
+   focal_net = focal_net.cuda(8)
 
-   # Get a tiny NeRF model. Hidden dimension set to 256(128)
-   nerf_model = TinyNerf(pos_in_dims=63, dir_in_dims=27, D=256).cuda(6)
+   #pose_param_net = LearnPose(num_cams=N_IMGS, learn_R=True, learn_t=True).cuda(8)
+   pose_param_net = LearnPose(num_cams=N_IMGS, learn_R=True, learn_t=True)
+   pose_param_net.load_state_dict(torch.load(f"{model_weight_path}/{scene_name}_pose.pt"))
+   pose_param_net = pose_param_net.cuda(8)
+
+   # Get a tiny NeRF model. Hidden dimension set to 128
+   nerf_model = TinyNerf(pos_in_dims=63, dir_in_dims=27, D=256).cuda(8)
 
    # Set lr and scheduler: these are just stair-case exponantial decay lr schedulers.
    opt_nerf = torch.optim.Adam(nerf_model.parameters(), lr=0.001)
@@ -336,7 +335,7 @@ if __name__ == "__main__":
 
    #train set up
    step_i = 0
-
+   
    # Training
    #print('Training... Check results in the tensorboard above.')
    for epoch_i in tqdm(range(N_EPOCH), desc='Training'):
@@ -348,22 +347,22 @@ if __name__ == "__main__":
            torch.save(pose_param_net.state_dict(),f"{model_weight_path}/{scene_name}_pose.pt")
            break
            #clear GPU memory
-           del focal_net
            del pose_param_net
            del nerf_model
+           del focal_net
            torch.cuda.empty_cache()
 
            #reload carmera model
            focal_net = LearnFocal(H, W, req_grad=True)
            focal_net.load_state_dict(torch.load(f"{model_weight_path}/{scene_name}_focal.pt"))
-           focal_net = focal_net.cuda(6)
+           focal_net = focal_net.cuda(8)
 
            pose_param_net = LearnPose(num_cams=N_IMGS, learn_R=True, learn_t=True)
            pose_param_net.load_state_dict(torch.load(f"{model_weight_path}/{scene_name}_pose.pt"))
-           pose_param_net = pose_param_net.cuda(6)
+           pose_param_net = pose_param_net.cuda(8)
 
            #re-initialize Nerf
-           nerf_model = TinyNerf(pos_in_dims=63, dir_in_dims=27, D=256).cuda(6)
+           nerf_model = TinyNerf(pos_in_dims=63, dir_in_dims=27, D=256).cuda(8)
        """
        L2_loss = train_one_epoch(imgs, H, W, ray_params, opt_nerf, opt_focal,
                                  opt_pose, nerf_model, focal_net, pose_param_net)
@@ -380,19 +379,18 @@ if __name__ == "__main__":
 
        learned_c2ws = torch.stack([pose_param_net(i) for i in range(N_IMGS)])  # (N, 4, 4)
        pose_history.append(learned_c2ws[:, :3, 3])  # (N, 3) only store positions as we vis in 2D.
-              
+
        with torch.no_grad():
-                      
            if (epoch_i+1) % EVAL_INTERVAL == 0:
                eval_c2w = torch.eye(4, dtype=torch.float32)  # (4, 4)
                fxfy = focal_net()
                rendered_img, rendered_depth = render_novel_view(eval_c2w, H, W, fxfy, ray_params, nerf_model)
                writer.add_image('eval/img', rendered_img.permute(2, 0, 1), global_step=epoch_i)
                writer.add_image('eval/depth', rendered_depth.unsqueeze(0), global_step=epoch_i)
-              
+
        #update step i
        step_i = step_i + 1
-
+       
    pose_history = torch.stack(pose_history).detach().cpu().numpy()  # (N_epoch, N_img, 3)
    print('Training finished.')
 
